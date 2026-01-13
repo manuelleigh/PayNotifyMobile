@@ -14,9 +14,8 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
           add(TokenPackage())
+          add(NotificationAccessPackage())
         },
     )
   }
@@ -24,5 +23,8 @@ class MainApplication : Application(), ReactApplication {
   override fun onCreate() {
     super.onCreate()
     loadReactNative(this)
+
+    WatchdogScheduler.schedule(applicationContext)
+    QueueSenderScheduler.ensurePeriodic(applicationContext)
   }
 }
