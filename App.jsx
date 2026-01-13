@@ -1,4 +1,4 @@
-// App.jsx (o App.js)
+// App.jsx
 import React, { useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -73,17 +73,15 @@ export default function App() {
   const pushEnabledPkgsToNative = useCallback(pkgsSet => {
     try {
       const arr = Array.from(pkgsSet);
-      // Importante: este método lo añadimos en el módulo nativo (te dejo el código abajo)
       TokenModule?.setEnabledPackages?.(arr);
     } catch (e) {
-      // No rompe la app si el módulo aún no está actualizado
+      // No rompe la app
     }
   }, []);
 
   const loadEnabledPkgs = useCallback(async () => {
     const raw = await AsyncStorage.getItem(STORAGE_ENABLED_PKGS);
 
-    // Default: solo Yape activo si es primera vez
     let pkgs = [];
     if (raw) {
       try {
@@ -111,7 +109,7 @@ export default function App() {
     [pushEnabledPkgsToNative],
   );
 
-  // Boot: recuperar token + selección y setearlos al nativo
+  // Boot
   useEffect(() => {
     (async () => {
       try {
@@ -136,20 +134,17 @@ export default function App() {
   }, [loadEnabledPkgs]);
 
   useEffect(() => {
-    // Si TokenModule no existe aún, no hacemos nada
     if (!TokenModule) return;
 
     const emitter = new NativeEventEmitter(TokenModule);
-
     const sub = emitter.addListener('PayNotifyAuthInvalid', () => {
-      // Token inválido (401). Forzamos re-login.
       forceLogoutAuthInvalid();
     });
 
     return () => sub.remove();
   }, [forceLogoutAuthInvalid]);
 
-  // Revisa permiso al arrancar y cuando vuelve a foreground
+  // Revisa permiso
   useEffect(() => {
     refreshNotifAccess();
 
@@ -166,8 +161,6 @@ export default function App() {
     setToken(newToken);
     await AsyncStorage.setItem(STORAGE_TOKEN, newToken);
     TokenModule?.setToken?.(newToken);
-
-    // Al loguear, refrescamos permiso y reenviamos selección al nativo
     refreshNotifAccess();
     pushEnabledPkgsToNative(enabledPkgs);
   };
@@ -184,11 +177,8 @@ export default function App() {
 
   const forceLogoutAuthInvalid = useCallback(async () => {
     await AsyncStorage.removeItem(STORAGE_TOKEN);
-
     setToken(null);
-
     TokenModule?.setToken?.('');
-
     TokenModule?.clearAuthInvalid?.();
   }, []);
 
@@ -197,9 +187,7 @@ export default function App() {
     if (next.has(pkg)) next.delete(pkg);
     else next.add(pkg);
 
-    // Evitar que se queden sin ninguno (opcional)
     if (next.size === 0) {
-      // fuerza al menos Yape
       next.add('com.bcp.innovacxion.yapeapp');
     }
 
@@ -235,31 +223,25 @@ export default function App() {
         </Text>
       </View>
 
-      {/* Estado */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Estado</Text>
-
         <View style={styles.row}>
           <View style={[styles.dot, { backgroundColor: '#16a34a' }]} />
           <Text style={styles.rowText}>Sesión activa</Text>
         </View>
-
         <View style={styles.row}>
           <View style={[styles.dot, { backgroundColor: '#7c3aed' }]} />
           <Text style={styles.rowText}>
             Listo para capturar y enviar eventos
           </Text>
         </View>
-
         <Text style={styles.hint}>
           Se enviarán notificaciones solo de los bancos que actives abajo.
         </Text>
       </View>
 
-      {/* Bancos monitoreados */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Bancos monitoreados</Text>
-
         {BANKS.map(b => {
           const enabled = enabledPkgs.has(b.pkg);
           return (
@@ -277,16 +259,13 @@ export default function App() {
             </View>
           );
         })}
-
         <Text style={styles.hint}>
           Tip: activa solo los que uses para reducir “ruido” y ahorrar batería.
         </Text>
       </View>
 
-      {/* Permisos */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Permiso de notificaciones</Text>
-
         <View style={styles.row}>
           <View
             style={[
@@ -305,12 +284,10 @@ export default function App() {
             Acceso a notificaciones: {permissionLabel}
           </Text>
         </View>
-
         <Text style={styles.hint}>
           Este permiso es obligatorio. Si está inactivo, activa el acceso en
           Ajustes.
         </Text>
-
         <View style={{ marginTop: 12 }}>
           {!notifAccess && (
             <Pressable
@@ -323,7 +300,6 @@ export default function App() {
               <Text style={styles.btnPrimaryText}>Activar en Ajustes</Text>
             </Pressable>
           )}
-
           <Pressable
             style={styles.btnGhost}
             onPress={refreshNotifAccess}
@@ -336,10 +312,8 @@ export default function App() {
         </View>
       </View>
 
-      {/* Acciones */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Acciones</Text>
-
         <Pressable style={styles.btnSecondary} onPress={onLogout}>
           <Text style={styles.btnSecondaryText}>Cerrar sesión</Text>
         </Pressable>

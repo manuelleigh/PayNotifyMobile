@@ -5,7 +5,6 @@ import android.content.Intent
 import android.provider.Settings
 import com.facebook.react.bridge.*
 
-
 class NotificationAccessModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
@@ -21,8 +20,6 @@ class NotificationAccessModule(reactContext: ReactApplicationContext) :
                 "enabled_notification_listeners"
             ) ?: ""
 
-            // En la práctica, contiene strings tipo:
-            // com.paynotifymobile/com.paynotifymobile.NotificationListener:...
             val isEnabled = enabled.contains(cn.flattenToString())
             promise.resolve(isEnabled)
         } catch (e: Exception) {
@@ -71,7 +68,4 @@ class NotificationAccessModule(reactContext: ReactApplicationContext) :
             promise.reject("ERR_FORCE_REBIND", e)
         }
     }
-
-
-
 }

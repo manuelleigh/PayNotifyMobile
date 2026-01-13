@@ -1,10 +1,16 @@
 package com.paynotifymobile
 
 import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -19,9 +25,9 @@ import org.json.JSONObject
 
 class NotificationListener : NotificationListenerService() {
 
-    private val apiUrl = "https://paynotify-api.yumi.net.pe/api/notifications"
-    private val deviceId = "android-" + android.os.Build.MODEL.replace(" ", "_")
     private val networkExecutor = Executors.newSingleThreadExecutor()
+    private val deviceId = "android-" + android.os.Build.MODEL.replace(" ", "_")
+    private val apiUrl = "https://paynotify-api.yumi.net.pe/api/notifications"
 
     private data class SourceConfig(
         val sourceKey: String,
@@ -60,68 +66,65 @@ class NotificationListener : NotificationListenerService() {
 
     private val sourceByPkg = sources.associateBy { it.packageName }
 
+    companion object {
+        private const val CHANNEL_ID = "PayNotifyListenerChannel"
+        private const val NOTIFICATION_ID = 1
+    }
+
     override fun onCreate() {
         super.onCreate()
         Log.i("PayNotify", "NotificationListener onCreate()")
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i("PayNotify", "onStartCommand llamado. Asegurando que el servicio no muera.")
+        return START_STICKY
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "PayNotify Listener",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Notificación persistente para mantener el servicio activo"
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        Log.i("PayNotify", "Listener CONNECTED")
-
+        Log.i("PayNotify", "Listener CONNECTED. Iniciando en primer plano directamente.")
         AppPrefs.setListenerHeartbeat(applicationContext)
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("PayNotify activo")
+            .setContentText("Escuchando notificaciones de pago.")
+            .setSmallIcon(R.mipmap.ic_launcher) // Asegúrate que este ícono existe
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
     }
 
     override fun onListenerDisconnected() {
         super.onListenerDisconnected()
         Log.i("PayNotify", "Listener DISCONNECTED")
-
-        tryRebind()
-    }
-
-    private fun tryRebind() {
-        val cn = android.content.ComponentName(this, NotificationListener::class.java)
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-            try {
-                requestRebind(cn)
-                Log.i("PayNotify", "requestRebind() ejecutado")
-                return
-            } catch (e: Exception) {
-                Log.e("PayNotify", "requestRebind() falló", e)
-            }
-        }
-
-        try {
-            val pm = packageManager
-            pm.setComponentEnabledSetting(
-                cn,
-                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                android.content.pm.PackageManager.DONT_KILL_APP
-            )
-            pm.setComponentEnabledSetting(
-                cn,
-                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                android.content.pm.PackageManager.DONT_KILL_APP
-            )
-            Log.i("PayNotify", "Toggle de componente aplicado")
-        } catch (e: Exception) {
-            Log.e("PayNotify", "Toggle de componente falló", e)
-        }
+        stopForeground(true)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         AppPrefs.setListenerHeartbeat(applicationContext)
         val pkg = sbn.packageName
 
-        // 1) Filtrar por paquetes habilitados por el usuario
         val enabledPkgs = AppPrefs.getEnabledPackages(applicationContext)
         if (!enabledPkgs.contains(pkg)) return
 
-        // 2) Verificar si el paquete está soportado (tiene config)
         val config = sourceByPkg[pkg] ?: return
 
-        // 3) Token persistente
         val token = AppPrefs.getToken(applicationContext)
         if (token.isBlank()) {
             Log.w("PayNotify", "Token vacío. La app debe iniciar sesión antes de enviar.")
@@ -134,9 +137,7 @@ class NotificationListener : NotificationListenerService() {
 
         if (title.isBlank() && message.isBlank()) return
 
-        // 4) Filtro anti-ruido
         if (!shouldSend(config, title, message)) {
-            // Log.d("PayNotify", "IGNORADO ${config.sourceKey} -> title=$title msg=$message")
             return
         }
 
@@ -159,31 +160,26 @@ class NotificationListener : NotificationListenerService() {
             deviceId = deviceId,
             externalRef = externalRef
         )
-
     }
 
     private fun shouldSend(config: SourceConfig, title: String, message: String): Boolean {
         val t = title.lowercase(Locale.getDefault())
         val m = message.lowercase(Locale.getDefault())
 
-        // 1) Título exacto (caso Yape)
         if (config.strictTitleEquals.isNotEmpty()) {
             if (!config.strictTitleEquals.contains(title)) return false
         }
 
-        // 2) Si definiste titleContainsAny, entonces exige que el title cumpla
         if (config.titleContainsAny.isNotEmpty()) {
             val okTitle = config.titleContainsAny.any { t.contains(it) }
             if (!okTitle) return false
         }
 
-        // 3) Mensaje con palabras clave
         if (config.messageMustContainAny.isNotEmpty()) {
             val okMsg = config.messageMustContainAny.any { m.contains(it) }
             if (!okMsg) return false
         }
 
-        // 4) Que parezca monto
         val looksLikeMoney = Regex("""s/\s?\d+([.,]\d{1,2})?""").containsMatchIn(m)
         if (!looksLikeMoney) return false
 
@@ -210,59 +206,6 @@ class NotificationListener : NotificationListenerService() {
         return ""
     }
 
-    private fun sendToBackend(
-        token: String,
-        pkg: String,
-        title: String,
-        message: String,
-        receivedAt: String,
-        deviceId: String,
-        externalRef: String
-    ) {
-        networkExecutor.execute {
-            var conn: HttpURLConnection? = null
-            try {
-                val url = URL(apiUrl)
-                conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
-                    setRequestProperty("Accept", "application/json")
-                    setRequestProperty("Authorization", "Bearer $token")
-                }
-
-                val json = JSONObject().apply {
-                    put("appPackage", pkg)
-                    put("title", title)
-                    put("text", message)
-                    put("receivedAt", receivedAt)
-                    put("deviceId", deviceId)
-                    put("externalRef", externalRef)
-                }
-
-                conn.outputStream.use { os ->
-                    os.write(json.toString().toByteArray(Charsets.UTF_8))
-                }
-
-                val code = conn.responseCode
-                if (code in 200..299) {
-                    Log.d("PayNotify", "Enviado OK ($code) externalRef=$externalRef")
-                } else {
-                    val err = conn.errorStream?.let { readStream(it) } ?: "sin body"
-                    Log.e("PayNotify", "Error HTTP $code -> $err")
-                }
-            } catch (e: Exception) {
-                Log.e("PayNotify", "Error enviando notificación", e)
-            } finally {
-                conn?.disconnect()
-            }
-        }
-    }
-
-    private data class HttpResult(val code: Int, val body: String)
-
     private fun sendOptimisticOrQueue(
         token: String,
         pkg: String,
@@ -272,14 +215,12 @@ class NotificationListener : NotificationListenerService() {
         deviceId: String,
         externalRef: String
     ) {
-        // Si ya sabemos que auth está inválida, no intentes HTTP (solo cola)
         if (AppPrefs.isAuthInvalid(applicationContext)) {
             enqueueAndSchedule(pkg, title, message, receivedAt, deviceId, externalRef, "auth_invalid_flag")
             return
         }
 
         networkExecutor.execute {
-            // 1) Intento inmediato (real-time en condiciones normales)
             val result = postNow(
                 token = token,
                 pkg = pkg,
@@ -297,19 +238,16 @@ class NotificationListener : NotificationListenerService() {
                 }
 
                 result.code == 401 -> {
-                    // 2) Token inválido: pausamos cola + avisamos RN
                     Log.e("PayNotify", "401 Unauthorized. Pausando cola y notificando RN.")
 
                     AppPrefs.setAuthInvalid(applicationContext, true)
                     AuthBroadcast.sendAuthInvalid(applicationContext)
 
-                    // Guardar evento en cola (para enviarlo luego del re-login)
                     enqueueAndSchedule(pkg, title, message, receivedAt, deviceId, externalRef, "401 Unauthorized: ${result.body}")
                     return@execute
                 }
 
                 else -> {
-                    // 3) Errores normales (0=exception/red) -> cola + retry
                     val reason = "HTTP ${result.code}: ${result.body}"
                     Log.e("PayNotify", "Fallo envío inmediato. Encolando. $reason")
 
@@ -319,6 +257,8 @@ class NotificationListener : NotificationListenerService() {
             }
         }
     }
+
+    private data class HttpResult(val code: Int, val body: String)
 
     private fun postNow(
         token: String,
@@ -379,7 +319,6 @@ class NotificationListener : NotificationListenerService() {
         errorReason: String
     ) {
         try {
-            // IMPORTANTE: esto requiere que ya tengas Room + QueueRepository + entidad
             val entity = QueuedNotificationEntity(
                 appPackage = pkg,
                 title = title,
@@ -390,18 +329,15 @@ class NotificationListener : NotificationListenerService() {
                 lastError = errorReason
             )
 
-            // Guardar en cola (sin bloquear la app principal)
             kotlinx.coroutines.runBlocking {
-                QueueRepository(applicationContext).enqueue(entity) // insert IGNORE por externalRef
+                QueueRepository(applicationContext).enqueue(entity)
             }
 
-            // Intentar envío cuando haya red
             QueueSenderScheduler.kick(applicationContext)
         } catch (e: Exception) {
             Log.e("PayNotify", "Error encolando (fallback)", e)
         }
     }
-
 
     private fun readStream(input: java.io.InputStream): String {
         val br = BufferedReader(InputStreamReader(input))
@@ -412,7 +348,7 @@ class NotificationListener : NotificationListenerService() {
         }
         return sb.toString()
     }
-
+
     private fun sha256(input: String): String {
         val md = MessageDigest.getInstance("SHA-256")
         val bytes = md.digest(input.toByteArray(Charsets.UTF_8))
